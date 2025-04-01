@@ -5,7 +5,7 @@ import io
 import pandas as pd
 from datetime import datetime, timedelta
 
-BUCKET_NAME = os.environ.get("SPIRITS_BUCKET", "")  # ✅ Safe fallback
+BUCKET_NAME = os.environ.get("SPIRITS_BUCKET", "spiritsbackups")  # ✅ Safe fallback
 PREFIX_BASE = "processed_csvs/"
 REPORT_DIR = "./reports/yearly"
 
