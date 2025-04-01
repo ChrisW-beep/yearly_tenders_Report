@@ -1,15 +1,15 @@
-import os
-import csv
+#!/usr/bin/env python3
 import boto3
 import io
 import pandas as pd
 from datetime import datetime, timedelta
+import csv
 
-BUCKET_NAME = os.environ.get("SPIRITS_BUCKET", "spiritsbackups")  # ✅ Safe fallback
+BUCKET_NAME = "spiritsbackups"
 PREFIX_BASE = "processed_csvs/"
-REPORT_DIR = "./reports/yearly"
+YEARLY_OUTPUT_PREFIX = "yearly_reports"
 
-s3 = boto3.client("s3")  # ✅ No profile needed!
+s3 = boto3.client("s3")
 
 
 def stream_csv_from_s3(key):
@@ -50,7 +50,6 @@ def process_prefix(prefix):
 
         df_jnl = df_jnl[df_jnl["RFLAG"] == "0"]
 
-        # ✅ 12-month range
         today = datetime.today()
         first_day_this_month = today.replace(day=1)
         start_range = (first_day_this_month - pd.DateOffset(months=12)).date()
@@ -69,7 +68,6 @@ def process_prefix(prefix):
             (df_jnl["LINE"] == "950") & (df_jnl["LINE_next"] == "980")
         ].copy()
         df_filtered["adj_PRICE"] = df_filtered["PRICE"]
-
         df_filtered["MONTH"] = df_filtered["DATE_parsed"].dt.to_period("M").astype(str)
 
         report = (
@@ -82,41 +80,35 @@ def process_prefix(prefix):
         ccprocessor = extract_ini_value(prefix, "DCPROCESSOR")
         cardinterface = extract_ini_value(prefix, "CardInterface")
 
-        os.makedirs(REPORT_DIR, exist_ok=True)
-        report_path = os.path.join(REPORT_DIR, f"yearly_{prefix}.csv")
+        # 🔄 Write directly to S3
+        csv_buffer = io.StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow([
+            "Astoreid", "Storename", "MerchantID", "CCProcessor", "Month",
+            "Type", "Sale_amount", "Sale_count", "CardInterface", "currency"
+        ])
 
-        with open(report_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "Astoreid",
-                    "Storename",
-                    "MerchantID",
-                    "CCProcessor",
-                    "Month",
-                    "Type",
-                    "Sale_amount",
-                    "Sale_count",
-                    "CardInterface",
-                    "currency",
-                ]
-            )
-            for _, row in report.iterrows():
-                writer.writerow(
-                    [
-                        prefix,
-                        store_name,
-                        merchant_id,
-                        ccprocessor,
-                        row["MONTH"],
-                        row["DESCRIPT_next"],
-                        row["sale_amount"],
-                        row["sale_count"],
-                        cardinterface,
-                        "USD",
-                    ]
-                )
-        print(f"✅ {prefix} → {report_path}", flush=True)
+        for _, row in report.iterrows():
+            writer.writerow([
+                prefix,
+                store_name,
+                merchant_id,
+                ccprocessor,
+                row["MONTH"],
+                row["DESCRIPT_next"],
+                row["sale_amount"],
+                row["sale_count"],
+                cardinterface,
+                "USD",
+            ])
+
+        output_key = f"{YEARLY_OUTPUT_PREFIX}/{prefix}/yearly_{prefix}.csv"
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=output_key,
+            Body=csv_buffer.getvalue().encode("utf-8")
+        )
+        print(f"✅ Uploaded {output_key}", flush=True)
 
     except Exception as e:
         print(f"❌ Failed to process {prefix}: {e}", flush=True)
