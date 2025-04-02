@@ -52,8 +52,13 @@ def process_prefix(prefix):
 
         today = datetime.today()
         first_day_this_month = today.replace(day=1)
-        start_range = (first_day_this_month - pd.DateOffset(months=12)).date()
+
+        # Always start exactly 12 months before, on the 1st of that month
+        start_range = (first_day_this_month - pd.DateOffset(months=12)).replace(day=1).date()
+
+        # End on the last day of the previous month
         end_range = (first_day_this_month - timedelta(days=1)).date()
+
 
         df_jnl["DATE_parsed"] = pd.to_datetime(df_jnl["DATE"], errors="coerce")
         df_jnl = df_jnl[
