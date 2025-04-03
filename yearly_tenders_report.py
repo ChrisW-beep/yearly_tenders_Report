@@ -63,7 +63,7 @@ def process_prefix(prefix, rows):
         df_jnl["DESCRIPT_next"] = df_jnl["DESCRIPT"].shift(-1)
 
         df_filtered = df_jnl[
-            (df_jnl["LINE"] == "950") & (df_jnl["LINE_next"] == "980")
+            (df_jnl["LINE"] == "950") & (df_jnl["LINE_next"] == "980") & (df_jnl["DESCRIPT_next"] != "")
         ].copy()
 
         df_filtered["MONTH"] = df_filtered["DATE_parsed"].dt.to_period("M").astype(str)
