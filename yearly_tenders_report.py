@@ -62,23 +62,18 @@ def process_prefix(prefix, rows):
         df_jnl["LINE_next"] = df_jnl["LINE"].shift(-1)
         df_jnl["DESCRIPT_next"] = df_jnl["DESCRIPT"].shift(-1)
 
-        # Fill RFLAG from LINE=1 row downward
-        df_jnl["RFLAG_FILLED"] = df_jnl.apply(
-            lambda row: row["RFLAG"] if row["LINE"] == "1" else None,
-            axis=1
-        )
-        df_jnl["RFLAG_FILLED"] = df_jnl["RFLAG_FILLED"].ffill()
-
         df_filtered = df_jnl[
             (df_jnl["LINE"] == "950") & (df_jnl["LINE_next"] == "980")
         ].copy()
 
         df_filtered["MONTH"] = df_filtered["DATE_parsed"].dt.to_period("M").astype(str)
 
-        df_filtered["is_return"] = df_filtered["RFLAG_FILLED"] == "1"
+        # Identify returns based on PRICE < 0
+        df_filtered["is_return"] = df_filtered["PRICE"] < 0
+
         df_filtered["sale_amount"] = df_filtered.apply(lambda row: row["PRICE"] if not row["is_return"] else 0, axis=1)
         df_filtered["sale_count"] = df_filtered.apply(lambda row: 1 if not row["is_return"] else 0, axis=1)
-        df_filtered["reversal_amount"] = df_filtered.apply(lambda row: -row["PRICE"] if row["is_return"] else 0, axis=1)
+        df_filtered["reversal_amount"] = df_filtered.apply(lambda row: abs(row["PRICE"]) if row["is_return"] else 0, axis=1)
         df_filtered["reversal_count"] = df_filtered.apply(lambda row: 1 if row["is_return"] else 0, axis=1)
 
         report = (
