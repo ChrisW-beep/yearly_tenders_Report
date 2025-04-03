@@ -1,21 +1,20 @@
-#!/usr/bin/env python3
+# yearly_tenders_report.py
+import os
+import csv
 import boto3
 import io
 import pandas as pd
 from datetime import datetime, timedelta
-import csv
 
 BUCKET_NAME = "spiritsbackups"
 PREFIX_BASE = "processed_csvs/"
-YEARLY_OUTPUT_PREFIX = "yearly_reports"
+REPORT_KEY = "yearly_reports/yearly_tenders_report.csv"
 
 s3 = boto3.client("s3")
-
 
 def stream_csv_from_s3(key):
     obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
     return pd.read_csv(io.BytesIO(obj["Body"].read()), dtype=str).fillna("")
-
 
 def extract_ini_value(prefix, target):
     ini_key = f"{PREFIX_BASE}{prefix}/spirits.ini"
@@ -28,11 +27,10 @@ def extract_ini_value(prefix, target):
                 if key.strip().lower() == target.lower():
                     return f'"{value.strip()}"'
     except s3.exceptions.NoSuchKey:
-        return f'"N/A"'
-    return f'"N/A"'
+        return f'"Unknown{target}"'
+    return f'"Unknown{target}"'
 
-
-def process_prefix(prefix):
+def process_prefix(prefix, rows):
     try:
         jnl_key = f"{PREFIX_BASE}{prefix}/jnl.csv"
         str_key = f"{PREFIX_BASE}{prefix}/str.csv"
@@ -48,36 +46,49 @@ def process_prefix(prefix):
         except Exception:
             pass
 
-        df_jnl = df_jnl[df_jnl["RFLAG"] == "0"]
+        df_jnl["DATE_parsed"] = pd.to_datetime(df_jnl["DATE"], errors="coerce")
 
+        # ✅ 12-month range from first of month
         today = datetime.today()
         first_day_this_month = today.replace(day=1)
-
-        # Always start exactly 12 months before, on the 1st of that month
-        start_range = (first_day_this_month - pd.DateOffset(months=12)).replace(day=1).date()
-
-        # End on the last day of the previous month
+        start_range = (first_day_this_month - pd.DateOffset(months=12)).date()
         end_range = (first_day_this_month - timedelta(days=1)).date()
 
-
-        df_jnl["DATE_parsed"] = pd.to_datetime(df_jnl["DATE"], errors="coerce")
         df_jnl = df_jnl[
-            (df_jnl["DATE_parsed"].dt.date >= start_range)
-            & (df_jnl["DATE_parsed"].dt.date <= end_range)
+            (df_jnl["DATE_parsed"].dt.date >= start_range) &
+            (df_jnl["DATE_parsed"].dt.date <= end_range)
         ]
 
         df_jnl["LINE_next"] = df_jnl["LINE"].shift(-1)
         df_jnl["DESCRIPT_next"] = df_jnl["DESCRIPT"].shift(-1)
 
+        # Fill RFLAG from LINE=1 row downward
+        df_jnl["RFLAG_FILLED"] = df_jnl.apply(
+            lambda row: row["RFLAG"] if row["LINE"] == "1" else None,
+            axis=1
+        )
+        df_jnl["RFLAG_FILLED"] = df_jnl["RFLAG_FILLED"].ffill()
+
         df_filtered = df_jnl[
             (df_jnl["LINE"] == "950") & (df_jnl["LINE_next"] == "980")
         ].copy()
-        df_filtered["adj_PRICE"] = df_filtered["PRICE"]
+
         df_filtered["MONTH"] = df_filtered["DATE_parsed"].dt.to_period("M").astype(str)
+
+        df_filtered["is_return"] = df_filtered["RFLAG_FILLED"] == "1"
+        df_filtered["sale_amount"] = df_filtered.apply(lambda row: row["PRICE"] if not row["is_return"] else 0, axis=1)
+        df_filtered["sale_count"] = df_filtered.apply(lambda row: 1 if not row["is_return"] else 0, axis=1)
+        df_filtered["reversal_amount"] = df_filtered.apply(lambda row: -row["PRICE"] if row["is_return"] else 0, axis=1)
+        df_filtered["reversal_count"] = df_filtered.apply(lambda row: 1 if row["is_return"] else 0, axis=1)
 
         report = (
             df_filtered.groupby(["MONTH", "DESCRIPT_next"])
-            .agg(sale_amount=("adj_PRICE", "sum"), sale_count=("adj_PRICE", "count"))
+            .agg(
+                sale_amount=("sale_amount", "sum"),
+                sale_count=("sale_count", "sum"),
+                reversal_amount=("reversal_amount", "sum"),
+                reversal_count=("reversal_count", "sum")
+            )
             .reset_index()
         )
 
@@ -85,16 +96,8 @@ def process_prefix(prefix):
         ccprocessor = extract_ini_value(prefix, "DCPROCESSOR")
         cardinterface = extract_ini_value(prefix, "CardInterface")
 
-        # 🔄 Write directly to S3
-        csv_buffer = io.StringIO()
-        writer = csv.writer(csv_buffer)
-        writer.writerow([
-            "Astoreid", "Storename", "MerchantID", "CCProcessor", "Month",
-            "Type", "Sale_amount", "Sale_count", "CardInterface", "currency"
-        ])
-
         for _, row in report.iterrows():
-            writer.writerow([
+            rows.append([
                 prefix,
                 store_name,
                 merchant_id,
@@ -103,21 +106,14 @@ def process_prefix(prefix):
                 row["DESCRIPT_next"],
                 row["sale_amount"],
                 row["sale_count"],
+                row["reversal_amount"],
+                row["reversal_count"],
                 cardinterface,
                 "USD",
             ])
 
-        output_key = f"{YEARLY_OUTPUT_PREFIX}/{prefix}/yearly_{prefix}.csv"
-        s3.put_object(
-            Bucket=BUCKET_NAME,
-            Key=output_key,
-            Body=csv_buffer.getvalue().encode("utf-8")
-        )
-        print(f"✅ Uploaded {output_key}", flush=True)
-
     except Exception as e:
         print(f"❌ Failed to process {prefix}: {e}", flush=True)
-
 
 def main():
     paginator = s3.get_paginator("list_objects_v2")
@@ -130,9 +126,32 @@ def main():
                 prefix = p["Prefix"].split("/")[-2]
                 prefixes.append(prefix)
 
+    all_rows = []
     for prefix in sorted(prefixes):
-        process_prefix(prefix)
+        process_prefix(prefix, all_rows)
 
+    # Write to single CSV
+    output_csv = io.StringIO()
+    writer = csv.writer(output_csv)
+    writer.writerow([
+        "Astoreid",
+        "Storename",
+        "MerchantID",
+        "CCProcessor",
+        "Month",
+        "Type",
+        "Sale_amount",
+        "Sale_count",
+        "Reversal_amount",
+        "Reversal_count",
+        "CardInterface",
+        "currency",
+    ])
+    writer.writerows(all_rows)
+
+    # Upload to S3
+    s3.put_object(Bucket=BUCKET_NAME, Key=REPORT_KEY, Body=output_csv.getvalue().encode("utf-8"))
+    print(f"✅ Uploaded single yearly report to s3://{BUCKET_NAME}/{REPORT_KEY}", flush=True)
 
 if __name__ == "__main__":
     main()
