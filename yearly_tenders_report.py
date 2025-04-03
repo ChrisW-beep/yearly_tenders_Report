@@ -6,7 +6,7 @@ import io
 import pandas as pd
 from datetime import datetime, timedelta
 
-BUCKET_NAME = "spiritsbackups"
+BUCKET_NAME = "spiritsbucketdev"
 PREFIX_BASE = "processed_csvs/"
 REPORT_KEY = "yearly_reports/yearly_tenders_report.csv"
 
