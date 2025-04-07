@@ -27,8 +27,8 @@ def extract_ini_value(prefix, target):
                 if key.strip().lower() == target.lower():
                     return f'"{value.strip()}"'
     except s3.exceptions.NoSuchKey:
-        return f'"Unknown{target}"'
-    return f'"Unknown{target}"'
+        return f'"N/A"'
+    return f'"N/A"'
 
 def process_prefix(prefix, rows):
     try:
