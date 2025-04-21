@@ -49,23 +49,23 @@ def process_prefix(prefix, rows):
         df_jnl["DATE_parsed"] = pd.to_datetime(df_jnl["DATE"], errors="coerce")
 
         # ✅ Support Jenkins-passed date overrides
-start_str = os.environ.get("START_DATE", "")
-end_str = os.environ.get("END_DATE", "")
+        start_str = os.environ.get("START_DATE", "")
+        end_str = os.environ.get("END_DATE", "")
 
-if start_str and end_str:
-    try:
+    if start_str and end_str:
+        try:
         start_range = pd.to_datetime(start_str).date()
         end_range = pd.to_datetime(end_str).date()
         print(f"📅 Using custom date range: {start_range} to {end_range}", flush=True)
-    except Exception as e:
+        except Exception as e:
         print(f"⚠️ Invalid date format passed. Falling back to default 12-month range. Error: {e}", flush=True)
         start_str = end_str = ""  # force fallback
-if not start_str or not end_str:
-    today = datetime.today()
-    first_day_this_month = today.replace(day=1)
-    start_range = (first_day_this_month - pd.DateOffset(months=12)).date()
-    end_range = (first_day_this_month - timedelta(days=1)).date()
-    print(f"📅 Using default date range: {start_range} to {end_range}", flush=True)
+    if not start_str or not end_str:
+        today = datetime.today()
+        first_day_this_month = today.replace(day=1)
+        start_range = (first_day_this_month - pd.DateOffset(months=12)).date()
+        end_range = (first_day_this_month - timedelta(days=1)).date()
+        print(f"📅 Using default date range: {start_range} to {end_range}", flush=True)
 
 
         df_jnl = df_jnl[
